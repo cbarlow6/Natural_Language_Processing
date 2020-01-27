@@ -1,0 +1,590 @@
+---
+title: "CIS8392 Course Project"
+author: "Catresa Barlow and Wan-Ting Tsai"
+date: "5/1/2019"
+output: 
+  html_document:
+    toc: TRUE
+  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#install.packages(c("igraph", "ggforce", "ggraph"))
+#install.packages("topicmodels")
+#install.packages("wordcloud")
+library(dplyr)
+library(foreach)
+library(httr)
+library(jsonlite)
+library(readr)
+library(stringr)
+library(tidytext) 
+library(tidyverse)
+library(wordcloud)
+library(ggplot2)
+library(widyr)
+library(ggraph)
+library(igraph)
+library(topicmodels)
+library(kableExtra)
+library(RedditExtractoR)
+library(lubridate)
+library(wordcloud)
+
+options(scipen = 999)
+```
+
+# Team Members
+Catresa Barlow &
+Wan-Ting Tsai
+
+# Business Context
+E-cigarettes entered the US markets in 2007 (Preventing Tobacco Addiction Foundation, 2019) and use among youth and young adults has increased steadily since the product’s introduction (Office of the Surgeon General, 2016). Sweet flavors like candy apple, bubble gum, marshmallow, cherry cola, smores, chocolate, orange soda, and taffy entice young people to try these products. Online availability of flavored tobacco products makes these products easily accessible by minors (Preventing Tobacco Addiction Foundation, 2019).
+
+Tobacco use among youth and young adults represents a major public health concern in the United States. “More than 95% of addicted smokers start before age 21”. Nicotine changes the receptor in the adolescent brain and creates lifelong addiction. (Preventing Tobacco Addiction Foundation, 2019). Although the use of conventional tobacco products by youth and young adults declined in recent decades, the Centers for Disease Control reports an increase in the use of “emerging tobacco products” like e-cigarettes among this population (Office of the Surgeon General, 2016).
+
+# Problem Description
+Tobacco companies employ social media to market their products to youth and young adults. Cessation and prevention campaigns require an understanding of how this population communicates about and uses these products. A key challenge for surveillance of the products and understanding their patterns of use is the diverse and nonstandard nomenclature for the devices (Alexander et al. 2016). These devices are referred to, by the companies themselves, and by consumers, as “e-cigarettes,” “e-cigs,” “cigalikes,” “e-hookahs,” “mods,” “vape pens,” “vapes,” and “tank systems.” 
+
+We hope to gain insight into tobacco marketing and patterns of use by analyzing social media platforms. Our project focuses on smoking among youth and young adults, and we believe Reddit is a platform used by this group. We wish to learn how tobacco companies communicate with this population and how this population communicates among itself on the subject of e-cigarettes.  
+
+
+# Data Summary, Exploration, and Discussion
+Our team used RedditExtractoR to collect our data. We extracted posts and comments from subreddits using the following keywords - "vape", "e-cigarettes", "vaping", "juul", "e-cig".Our dataset contains 365k rows and 18 columns.
+
+
+## Load Data and Pre-process Data
+```{r load_data}
+reddit_comments <- read_csv("reddit_data.csv")
+
+reddit_comments <- reddit_comments %>%
+  select(-upvote_prop, -post_score, -comment_score, -controversiality, -domain)
+#check for unique rows
+reddit_comments <- unique(reddit_comments)
+```
+
+```{r raw_data}
+kable(reddit_comments[1000, ], caption = "Raw Reddit Data") %>%
+  kable_styling(font_size = 10) %>%
+  scroll_box(width = "100%", height = "200px")
+
+
+kable(summary(reddit_comments), caption = "Data Summary") %>%
+  kable_styling(font_size = 10) %>%
+  scroll_box(width ="100%", height = "200px")  
+
+```
+
+
+```{r pre-process}
+#restructure data frame for comments
+reddit_comment_df <- reddit_comments %>%
+  mutate(thread_id = URL) %>%
+  mutate(comm_date = dmy(comm_date)) %>%
+  mutate(comment = replace_na(comment, ".")) %>%
+  mutate(comment = str_replace_all(comment,  
+                                   "<.+>|[[:^ascii:]]|www|https|http", " ")) %>%
+  mutate(comment = str_replace_all(comment,  "\\W", " ")) %>%
+  mutate(comment_id = structure,
+         comment_score = as.numeric(comment_score)) %>%
+  select(comm_date, subreddit, thread_id, user, 
+         comment_id, comment) %>% 
+  na.omit()
+
+# restructure dataframe for title and post text
+reddit_post_df <- reddit_comments %>%
+  mutate(comm_date = dmy(post_date)) %>%
+  mutate(thread_id = URL) %>%
+  mutate(user = author) %>%
+  mutate(comment_id = 0) %>%
+  mutate(post_text = replace_na(post_text, "."),
+         title = replace_na(title, ".")) %>%
+  mutate(post_text = str_replace_all(post_text,  
+                                     "<..>|[[:^ascii:]]|www|https|http", " "),
+         title = str_replace_all(title,  
+                                   "<.+>|[[:^ascii:]]|www|https|http", " ")) %>%
+  mutate(text = str_c(title, post_text, sep = ",")) %>%
+  mutate(comment = text) %>%
+  mutate(comment = str_replace_all(comment, "\\W", " ")) %>%
+  select(comm_date, subreddit, thread_id, user, 
+         comment_id, comment) %>%
+  unique() %>%
+  na.omit()
+
+#combine comments and post text
+reddit_df <- rbind(reddit_post_df, reddit_comment_df)
+
+#display dataset
+kable(reddit_df[1, ], caption = "Selected Reddit Data") %>%
+  kable_styling(font_size = 10) %>%
+  scroll_box(width = "100%", height = "200px")
+```
+
+## Explore Data
+
+```{r timeline}
+reddit_df %>%
+  group_by(month = floor_date(comm_date, "month")) %>%
+  summarize(comments = n()) %>%
+  ggplot(aes(month, comments)) +
+  geom_line() +
+  labs(title = "Comments Timeline") +
+  scale_x_date(date_labels = "%b/%y", date_breaks = "4 months") + 
+  theme(axis.text.x = element_text(size = 7, angle = 45))
+```
+
+Explore Subreddit Threads
+```{r explore}
+#number of comments
+n_comments <- nrow(reddit_df)
+
+#number of observations by subreddits
+subreddits <- reddit_df %>%
+  count(subreddit) %>%
+  unique()
+
+#number of subreddits
+n_subreddits <- count(subreddits)
+
+#number of threads  
+threads <-reddit_df %>%
+  count(thread_id) %>%
+  unique()
+
+summary_df <- tibble("number_subreddits"=n_subreddits, 
+                     "number_threads"=n_distinct(threads),
+                     "number_comments"=n_comments)
+
+summary_df %>%
+  kable() %>%
+  kable_styling(c("striped", "bordered"), 
+                full_width = FALSE, position = "left") %>%
+  row_spec(row = 1, align = "right")
+
+#subreddit with more than 1000 comments
+reddit_df %>%
+  group_by(subreddit) %>%
+  summarize(comments = n()) %>%
+  filter(comments > 1000) %>%
+  ggplot(aes(subreddit, comments, fill = comments)) +
+  geom_col() +
+  coord_flip() +
+  labs(title = "Subreddits With Highest Number of Comments (>1000 comments)")
+
+#display top 5 threads
+top5 <- top_n(threads, 5) %>%
+  arrange(desc(n))
+
+top5 %>%
+  kable(caption = "Top Five Thread by Comment Count") %>%
+  kable_styling(font_size = 8)
+
+```
+
+Explore Users
+```{r user}
+#user network
+user_df <- reddit_comments %>%
+  group_by(user) %>%
+  summarise(n = n()) %>%
+  filter(n<500) 
+  
+freq_users <- reddit_comments %>% 
+  anti_join(user_df, by = "user") %>%
+  mutate(user = str_replace_all(user,  "\\Q[deleted]\\E", " ")) %>%
+  group_by(user) %>%
+  summarise(n = n())
+
+freq_users %>%
+  filter(user != " ") %>%
+  ggplot((aes(x = n, y = user, color = user))) +
+  geom_point() +
+  labs(x = "number of comments", y = "user", title = "Users With Highest Number of Comments (>500 comments)")
+  #xlab("number of comments") +
+  #ylab("freq_user") 
+
+```
+
+User Network
+```{r network}
+#user network for smallest thread
+target_df <- reddit_comments[which(reddit_comments$num_comments == 
+                                     min(reddit_comments$num_comments)), ]
+network_list <- target_df %>%
+  user_network(include_author=FALSE, agg=TRUE) 
+
+network_list$plot
+```
+
+## Tokenize Data
+```{r tokenize}
+#tokenize
+tokens <- reddit_df %>%
+  unnest_tokens(output = word, input = comment)
+
+token_count <- tokens %>%
+  count(word,
+        sort = TRUE)
+
+cleaned_tokens <- tokens %>% 
+  anti_join(get_stopwords())
+
+#find numbers
+nums <- cleaned_tokens %>% 
+  filter(str_detect(word, "^[0-9]")) %>% 
+  select(word) %>% unique()
+
+#remove numbers
+cleaned_tokens <- cleaned_tokens %>% 
+  anti_join(nums, by = "word")
+
+#length(unique(cleaned_tokens$word))
+
+rare <- cleaned_tokens %>% 
+  count(word) %>% 
+  filter(n<10) %>% 
+  select(word) %>% 
+  unique()
+
+cleaned_tokens <- cleaned_tokens %>% 
+  anti_join(rare, by = "word")
+
+letters <- cleaned_tokens %>% 
+  filter(str_length(word) < 3) %>% 
+  select(word) %>% 
+  unique()  
+
+cleaned_tokens <- cleaned_tokens %>% 
+  anti_join(letters, by = "word")
+
+word_count <- cleaned_tokens %>%
+  count(word,
+        sort = TRUE)
+
+word_by_subreddit <- cleaned_tokens %>%
+  count(subreddit, word, sort= TRUE) %>%
+  ungroup()
+
+kable(head(word_count), caption = "word count") %>%
+  kable_styling(full_width=FALSE, position= "left")
+
+kable(head(word_by_subreddit), caption = "word by subreddit") %>%
+  kable_styling()
+```
+
+
+## Visualize Word Count
+```{r histogram}
+#histogram
+cleaned_tokens %>%
+  count(word, sort = T) %>%
+  rename(word_freq = n) %>%
+  ggplot(aes(x=word_freq)) +
+  geom_histogram(aes(y=..count..), 
+                 color="black", 
+                 fill="blue", 
+                 alpha=0.3) + 
+  scale_x_continuous(breaks=c(0:5,10,100,500,10e3), 
+                     trans="log1p", 
+                     expand=c(0,0)) + 
+  scale_y_continuous(breaks=c(0,100,1000,5e3,10e3,5e4,10e4,4e4), 
+                     expand=c(0,0)) + 
+  theme_bw() +
+  labs(title = "Word Frequency Histogram")
+  
+```
+
+
+# Natural Language Processing (NLP) Procedure Summary
+Our team used text mining techniques to surveil e-cigarettes young users who post content on Reddit. The goal is to understand how youth and young adults discuss topics of reasons for use, harm perception, frequency of use, flavorings, ad exposure, and quitting experience. 
+
+We employed sentiment analysis algorithms to analysis positive and negative words/sentences used to describe e-cigarette products.
+We also analyzed word frequencies to compare frequencies across different subreddits to discover which words occur most often in discussions and identify emerging products and trends. 
+
+
+## Sentiment Analysis
+For our sentiment analysis, we used the bing and afinn lexicon. We examined overall words as well as word by subreddits.
+```{r sentiment}
+comment_sentiment = cleaned_tokens %>% 
+  left_join(get_sentiments("bing")) %>% 
+  rename(bing = sentiment) %>% 
+  left_join(get_sentiments("afinn")) %>% 
+  rename(afinn = score)
+
+#Sentiment Analysis - bing by word
+bing_word_counts <- comment_sentiment %>% 
+  filter(!is.na(bing)) %>% 
+  count(word, bing, sort = TRUE)
+
+bing_word_counts %>%
+  filter(n > 5000) %>%
+  mutate(n = ifelse(bing == "negative", -n, n)) %>% 
+  mutate(word = reorder(word, n)) %>% 
+  ggplot(aes(word, n, fill = bing)) +
+  geom_col() +
+  coord_flip() +
+  labs(y = "Contribution to sentiment - bing")
+
+#Sentiment Analysis by subreddit - bing
+subreddit_sent_bing <- word_by_subreddit %>%
+  inner_join(get_sentiments("bing"), by = "word") %>%
+  mutate(sentiment = ifelse(sentiment == "negative", -1, 1)) %>% 
+  group_by(subreddit) %>%
+  summarize(sentiment = sum(sentiment * n) / sum(n))
+
+subreddit_sent_bing %>%
+  top_n(30, abs(sentiment)) %>%
+  mutate(subreddit = reorder(subreddit, sentiment)) %>%
+  ggplot(aes(subreddit, sentiment, fill = sentiment > 0)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  ylab("Average bing sentiment score - bing")
+
+#--------------------------------------------------------------
+#Sentiment Analysis - afinn by word
+afinn_word <- comment_sentiment %>%
+  filter(!is.na(afinn)) %>%
+  select(word, afinn) %>%
+  group_by(word) %>%
+  summarize(occurences = n(),
+            contribution = sum(afinn))
+
+
+afinn_word %>%
+  top_n(25, abs(contribution)) %>%
+  mutate(word = reorder(word, contribution)) %>%
+  ggplot(aes(word, contribution, fill = contribution > 0)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  labs(y = "Contribution to sentiment - afinn")
+
+#Sentiment Analysis - afinn by subreddit
+subreddit_sentiment <- word_by_subreddit %>%
+  inner_join(get_sentiments("afinn"), by = "word") %>%
+  group_by(subreddit) %>%
+  summarize(score = sum(score * n) / sum(n))
+
+subreddit_sentiment %>%
+  top_n(30, abs(score)) %>%
+  mutate(subreddit = reorder(subreddit, score)) %>%
+  ggplot(aes(subreddit, score, fill = score > 0)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  ylab("Average sentiment score - afinn")
+
+```
+
+## Relationships Between Words
+
+```{r cor}
+# word correlation
+uncommon <- cleaned_tokens %>% 
+  count(word) %>%
+  filter(n<1000) %>%
+  select(word) %>% 
+  unique()
+
+word_cor = cleaned_tokens %>% 
+  anti_join(uncommon, by = "word") %>% 
+  widyr::pairwise_cor(word, thread_id) %>% 
+  filter(!is.na(correlation),
+         correlation > .50)
+
+# Visualizing the correlations                                             
+word_cor_plot <- word_cor %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = correlation), show.legend = FALSE) + 
+  geom_node_point(color = "lightblue", size = 5) + 
+  geom_node_text(aes(label = name), repel = TRUE) +
+  theme_void()  
+
+word_cor_plot
+
+```
+
+
+```{r n_gram}
+#Tokenizing by bi-gram
+cleaned_text <- reddit_df %>% 
+  #mutate(comment = str_replace_all(comment,  "[0-9]", " "))  %>%
+  mutate(comment = str_replace_all(comment, "^[a-z]{0,2}$", " ")) %>%
+  select(subreddit, comment)
+
+bigrams <- cleaned_text %>% 
+  unnest_tokens(bigram, comment,
+                token = "ngrams", n = 2) 
+    
+# bigram counts:
+bigrams %>%
+  count(bigram, sort = TRUE)
+
+# filtering n-grams
+bigrams_separated <- bigrams %>%
+  separate(bigram, c("word1", "word2"), sep = " ")
+
+bigrams_filtered <- bigrams_separated %>% 
+  filter(!word1 %in% stop_words$word & 
+           str_length(word1)>1 &
+           word1 != "removed") %>% 
+  filter(!word2 %in% stop_words$word &
+           str_length(word2)>1 &
+           word2 != "removed")
+
+new_bigrams <-bigrams_filtered %>%
+  count(word1, word2, sort = TRUE)
+  
+# new bigram counts - first 5 rows:
+kable(head(new_bigrams), caption = "Bi-gram") %>%
+  kable_styling(full_width=FALSE, position= "left")
+
+```
+
+
+
+```{r tri_gram}
+#-----------------------------------------------
+#Tokenizing by tri-gram
+trigrams <- reddit_df %>% 
+  mutate(comment = str_replace_na(comment)) %>%
+  mutate(comment = str_replace_all(comment,  "[0-9]|NA", " "))  %>%
+  unnest_tokens(trigram, comment,
+                token = "ngrams", n = 3) 
+#trigrams %>% select(trigram)
+
+# trigram counts:
+#trigrams %>%
+#  count(trigram, sort = TRUE)
+
+# filtering n-grams
+trigrams_separated <- trigrams %>%
+  separate(trigram, c("word1", "word2", "word3"), sep = " ")
+
+trigrams_filtered <- trigrams_separated %>% 
+  filter(!word1 %in% stop_words$word & is.na(word1) == FALSE) %>% 
+  filter(!word2 %in% stop_words$word & is.na(word2) == FALSE) %>% 
+  filter(!word3 %in% stop_words$word & is.na(word3) == FALSE)
+  
+
+new_trigram <- trigrams_filtered %>%
+  count(word1, word2, word3, sort = TRUE)
+
+# new trigram counts:
+kable(head(new_trigram), caption = "Tri-gram") %>%
+  kable_styling()
+
+```
+
+```{r cloud}
+
+# define a nice color palette
+pal <- brewer.pal(8,"Dark2")
+
+# plot the 150 most common words
+trigrams_filtered %>%
+  count(word3) %>%
+  with(wordcloud(word3, n, scale=c(4,.1), min.freq=50, max.words = 150,
+                 random.order = FALSE, rot.per=.15, colors=pal))
+
+trigrams_filtered %>%
+  count(word2) %>%
+  with(wordcloud(word2, n, scale=c(4,.1), min.freq=50, max.words=150,
+                random.order=FALSE, rot.per=.15,
+                colors=pal))
+
+trigrams_filtered %>%
+  count(word1) %>%
+  with(wordcloud(word1, n, scale=c(4,.1), min.freq=50, max.words = 150,
+                 random.order = FALSE, rot.per=.15, colors=pal))
+```
+
+## Word and Document Frequency
+Word Frequency
+```{r freq_word}
+#Document(thread) Term Matrix
+#Post Term Matrix
+
+word_counts_by_thread_id <- cleaned_tokens %>% 
+  group_by(thread_id) %>%
+  count(word, sort = TRUE)
+
+review_dtm <- word_counts_by_thread_id %>% 
+  cast_dtm(thread_id, word, n)
+
+review_dtm
+
+#tf-idf
+tfidf <- word_counts_by_thread_id %>% 
+  bind_tf_idf(word, thread_id, n) 
+
+top_tfidf = tfidf %>%
+  group_by(thread_id) %>%
+  arrange(desc(tf_idf)) 
+
+kable(head(top_tfidf), caption = "Term Frequency by Thread") %>%
+  kable_styling(font_size = 9)
+
+```
+
+Word Frequency by Subreddit
+```{r freq_subreddit}
+
+tf_idf <- word_by_subreddit %>%
+  bind_tf_idf(word, subreddit, n) %>%
+  arrange(desc(tf_idf))
+
+tf_idf %>%
+  filter(str_detect(subreddit, "^vap|^Vap|^ele|^sci|^teen|^ecig|^Inn")) %>%
+  group_by(subreddit) %>%
+  top_n(12, tf_idf) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, tf-idf)) %>%
+  ggplot((aes(word, tf_idf, fill = subreddit))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap( ~ subreddit, scale = "free") +
+  ylab("tf-idf") +
+  coord_flip() +
+  labs(title = "Term Frequency By Subreddit")
+
+subreddit_cors <- word_by_subreddit %>%
+  pairwise_cor(subreddit, word, n, sort = TRUE)
+
+head(subreddit_cors)
+
+set.seed(1231)
+
+subreddit_cors %>%
+  filter(correlation > .90) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(alpha = correlation, width = correlation)) +
+  geom_node_point(size = 6, color = "lightblue") +
+  geom_node_text(aes(label = name), repel = TRUE) +
+  theme_void()
+
+```
+
+## Topic Modeling
+```{r topic}
+lda5 <- LDA(review_dtm, k = 5, control = list(seed = 1234)) 
+
+topics <- terms(lda5, 100)
+kable(head(topics)) %>%
+  kable_styling()
+```
+
+
+# NLP result summary and discussion
+Sentiment Analysis  
+We analyzed sentiment by word and subreddit and found that the majority of words in electronic cigarette posts and comments were positive. Users used words like "good", "awesome", "happy", and "love" in discussions. Most subreddits also had an overall positive sentiment.
+
+Relationships Between Words  
+Bigram - We noted strong relationships between words such as "quit  and smoking", "awesome and giveaway", "started and vaping". More analysis is needed to gain information about the reasons/motivations for those who wish to quit. Also, we would like to understand the role of giveaways in encouraging young smokers to start smoking/vaping.  
+
+Trigram - The trigram analysis did not reveal any significant trend related to smoking or e-cigarettes. Additional analysis is required.
+
+Word and Document Frequency -
+Our analysis revealed that words used frequently in discussions were "juice", "vaping", and "giveaway". Young e-cigarette users are attracted to flavored products or (juice). Additional analysis is needed to understand how these products are discussed. Also, the frequency of the word "giveaway" suggests that free products are being offered often as an enticement for users to begin smoking.
+
+Topic Modeling - The results from the topic models are consistent with the other analyses completed. All topics contain similar e-cigarette related words.
