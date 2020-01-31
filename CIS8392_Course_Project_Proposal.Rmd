@@ -1,0 +1,64 @@
+---
+title: "CIS8392 Course Project Proposal"
+author: "Catresa Barlow and Wan-Ting Tsai"
+date: "3/27/2019"
+output: html_document
+  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Team Members
+Catresa Barlow &
+Wan-Ting Tsai
+
+
+## Data
+Our project focuses on smoking among youth and young adults. We wish to learn how tobacco companies communicate with this population and how this population communicates among itself on the subject of e-cigarettes. 
+Our team will use the RedditExtractoR API to collect our data. We will extract discussions from the following subreddits.
+<https://www.reddit.com/r/electronic_cigarette/>,
+<https://www.reddit.com/r/vaporents>
+
+
+## Problem Description
+Tobacco use among youth and young adults represents a major public health concern in the United States. “More than 95% of addicted smokers start before age 21”. Nicotine changes the receptor in the adolescent brain and creates lifelong addiction. (Preventing Tobacco Addiction Foundation, 2019). Although the use of conventional tobacco products by youth and young adults declined in recent decades, the Centers for Disease Control reports an increase in the use of “emerging tobacco products” like e-cigarettes among this population (Office of the Surgeon General, 2016).
+
+E-cigarettes entered the US markets in 2007 (Preventing Tobacco Addiction Foundation, 2019) and use among youth and young adults has increased steadily since the product’s introduction (Office of the Surgeon General, 2016). Sweet flavors like candy apple, bubble gum, marshmallow, cherry cola, smores, chocolate, orange soda, and taffy entice young people to try these products. Online availability of flavored tobacco products makes these products easily accessible by minors (Preventing Tobacco Addiction Foundation, 2019).
+
+Tobacco companies employ social media to market their products to youth and young adults. Cessation and prevention campaigns require an understanding of how this population communicates about and uses these products. We may gain insight into tobacco marketing and patterns of use by analyzing social media platforms. 
+
+## Analytics Plan
+Our team will use text mining techniques to surveil e-cigarettes users under 25 years of age who post content on Reddit. The goal is to understand how youth and young adults discuss topics of reasons for use, harm perception, frequency of use, flavorings, ad exposure, and quitting experience. 
+
+We will employ sentiment analysis algorithms (e.g. coreNLP, cleanNLP, sentimentr) to analysis positive and negative words/sentences used to describe e-cigarette products.
+We will also look at word frequencies to compare frequencies across different posts/discussions. We will analyze which words occur most often in discussions to identify emerging products and trends. 
+
+
+## Evaluation Plan
+
+Quantitatively:
+We will calculate a term's tf-idf analysis to measure the importance of various words used. By analyzing word importance, we can understand the language used to describe e-cigarettes and identify trends. We will use ggplot2 to visualize rank, term frequency, and the term frequency distribution. 
+For the sentiment analysis, we will calculate net sentiment of post/discussions and plot the results.
+
+Qualitatively:
+We will also graph the co-occurrence and correlation between words. This analysis will provide an understanding of e-cigarette use as well as foster discovery of new e-cigarette patterns or trends. We will visualize both types of relationships as networks using the ggraph package.
+ 
+## Sample Code
+```{r key}
+#install.packages("RedditExtractoR")
+library(dplyr)
+library(RedditExtractoR)
+
+target_urls <- reddit_urls(search_terms="e-cigarette", subreddit="electronic_cigarette", cn_threshold=50)
+target_df <- target_urls %>%
+  filter(num_comments==min(target_urls$num_comments)) %$%
+  URL %>% reddit_content # get the contents of a small thread
+target_df$comment
+
+network_list <- target_df %>% user_network(include_author=FALSE, agg=TRUE)
+network_list$plot
+```
+
+
